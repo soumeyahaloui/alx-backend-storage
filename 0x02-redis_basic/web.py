@@ -1,36 +1,48 @@
-#!/usr/bin/env python3
-"""
-Caching request module
-"""
-import redis
+# web.py
+
 import requests
 from functools import wraps
-from typing import Callable
+import redis
+import time
 
+# Initialize Redis connection
+r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
 
-def track_get_page(fn: Callable) -> Callable:
-    """ Decorator for get_page
-    """
-    @wraps(fn)
-    def wrapper(url: str) -> str:
-        """ Wrapper that:
-            - check whether a url's data is cached
-            - tracks how many times get_page is called
-        """
-        client = redis.Redis()
-        client.incr(f'count:{url}')
-        cached_page = client.get(f'{url}')
-        if cached_page:
-            return cached_page.decode('utf-8')
-        response = fn(url)
-        client.set(f'{url}', response, 10)
-        return response
+def cache_decorator(func):
+    @wraps(func)
+    def wrapper(url):
+        # Construct cache and count keys
+        cache_key = f"cache:{url}"
+        count_key = f"count:{url}"
+
+        # Check if the URL is already cached
+        if r.exists(cache_key):
+            # Increment the count
+            r.incr(count_key)
+            return r.get(cache_key)
+        
+        # If not cached, fetch the content using the decorated function
+        content = func(url)
+        
+        # Cache the content with an expiration time of 10 seconds
+        r.setex(cache_key, 10, content)
+        
+        # Increment the count, initializing it if it doesn't exist
+        r.incr(count_key)
+        
+        return content
     return wrapper
 
-
-@track_get_page
+@cache_decorator
 def get_page(url: str) -> str:
-    """ Makes a http request to a given endpoint
-    """
+    """Fetches the HTML content of the given URL."""
     response = requests.get(url)
     return response.text
+
+# Example usage
+if __name__ == "__main__":
+    url = "http://slowwly.robertomurray.co.uk/delay/3000/url/http://www.google.com"
+    print(get_page(url))
+    # Subsequent calls within 10 seconds should hit the cache
+    print(get_page(url))
+
